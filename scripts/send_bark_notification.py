@@ -124,7 +124,6 @@ class BarkNotifier:
             
             # 按最后修改时间排序，获取最新的文件
             files_with_time = []
-            current_time = datetime.now()
             
             for result in results:
                 time_info = result.get('time_info', {})
@@ -137,23 +136,25 @@ class BarkNotifier:
                         from dateutil import parser
                         mod_time = parser.parse(last_modified)
                         
-                        # 计算时间差
-                        time_diff = current_time - mod_time.replace(tzinfo=None)
-                        time_ago = self._format_time_ago(time_diff)
+                        # 处理时区转换
+                        mod_time_beijing, time_ago = self._calculate_time_diff(mod_time)
+                        
+                        # 用于显示的时间字符串（北京时间）
+                        display_time = mod_time_beijing.strftime('%m-%d %H:%M')
                         
                         file_info = {
                             'repo': result['repository']['full_name'],
                             'file': result['file']['path'],
                             'matches': result['file']['match_count'],
-                            'last_modified': mod_time,
-                            'last_modified_str': mod_time.strftime('%m-%d %H:%M'),
+                            'last_modified': mod_time_beijing,
+                            'last_modified_str': display_time,
                             'time_ago': time_ago,
                             'is_public': not result['repository']['private'],
                             'author': last_commit.get('last_author', 'Unknown')
                         }
                         files_with_time.append(file_info)
-                    except:
-                        # 如果时间解析失败，跳过
+                    except Exception as e:
+                        print(f"⚠️ 处理时间信息失败 {last_modified}: {e}")
                         continue
             
             # 按时间排序，最新的在前
@@ -180,6 +181,53 @@ class BarkNotifier:
         except Exception as e:
             print(f"⚠️ 获取最新文件信息失败: {e}")
             return []
+    
+    def _calculate_time_diff(self, mod_time):
+        """计算时间差，正确处理时区"""
+        try:
+            from datetime import timezone, timedelta
+            
+            # 北京时间是 UTC+8
+            beijing_offset = timedelta(hours=8)
+            beijing_tz = timezone(beijing_offset)
+            
+            # 获取当前北京时间
+            current_beijing = datetime.now(beijing_tz)
+            
+            # 处理修改时间的时区
+            if mod_time.tzinfo is not None:
+                # 如果有时区信息，转换为北京时间
+                mod_time_beijing = mod_time.astimezone(beijing_tz)
+            else:
+                # 如果没有时区信息，假设是UTC时间
+                utc_tz = timezone.utc
+                mod_time_utc = mod_time.replace(tzinfo=utc_tz)
+                mod_time_beijing = mod_time_utc.astimezone(beijing_tz)
+            
+            # 计算时间差
+            time_diff = current_beijing - mod_time_beijing
+            time_ago = self._format_time_ago(time_diff)
+            
+            return mod_time_beijing, time_ago
+            
+        except Exception as e:
+            print(f"⚠️ 时区转换失败: {e}")
+            # 如果时区处理失败，使用简单的时间差计算
+            current_time = datetime.now()
+            
+            # 移除时区信息进行简单比较
+            if mod_time.tzinfo is not None:
+                mod_time_naive = mod_time.replace(tzinfo=None)
+                # 假设GitHub时间是UTC，加8小时转为北京时间
+                mod_time_beijing = mod_time_naive + timedelta(hours=8)
+            else:
+                # 假设是UTC时间，加8小时
+                mod_time_beijing = mod_time + timedelta(hours=8)
+            
+            time_diff = current_time - mod_time_beijing
+            time_ago = self._format_time_ago(time_diff)
+            
+            return mod_time_beijing, time_ago
     
     def _format_time_ago(self, time_diff):
         """格式化时间差为易读的格式"""
