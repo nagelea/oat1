@@ -21,6 +21,7 @@ class GitHubSearcher:
         self.max_results = int(os.environ.get('MAX_RESULTS', '100'))
         self.search_pattern = os.environ.get('SEARCH_PATTERN', 'sk-ant-oat01-')
         self.file_extensions = os.environ.get('FILE_EXTENSIONS', 'json').split(',')
+        self.file_path = os.environ.get('FILE_PATH', '')  # 新增：特定文件路径
         
         if not self.token:
             raise ValueError("❌ GITHUB_TOKEN 未设置")
@@ -36,24 +37,28 @@ class GitHubSearcher:
     
     def build_search_query(self) -> str:
         """构建搜索查询"""
-        # 构建语言查询
-        if len(self.file_extensions) == 1:
-            language_query = f'language:{self.file_extensions[0]}'
+        query_parts = [self.search_pattern]
+        
+        # 添加特定文件路径（如果指定）
+        if self.file_path:
+            query_parts.append(f'path:{self.file_path}')
         else:
-            # 多个扩展名用 OR 连接
-            ext_queries = [f'extension:{ext.strip()}' for ext in self.file_extensions]
-            language_query = ' OR '.join(ext_queries)
-            if len(ext_queries) > 1:
-                language_query = f'({language_query})'
+            # 如果没有指定特定路径，使用文件扩展名
+            if len(self.file_extensions) == 1:
+                language_query = f'language:{self.file_extensions[0]}'
+            else:
+                # 多个扩展名用 OR 连接
+                ext_queries = [f'extension:{ext.strip()}' for ext in self.file_extensions]
+                language_query = ' OR '.join(ext_queries)
+                if len(ext_queries) > 1:
+                    language_query = f'({language_query})'
+            query_parts.append(language_query)
         
-        base_query = f'{self.search_pattern} {language_query}'
-        
+        # 添加搜索范围
         if self.search_scope:
-            query = f'{base_query} {self.search_scope}'
-        else:
-            query = base_query
-            
-        return query
+            query_parts.append(self.search_scope)
+        
+        return ' '.join(query_parts)
     
     def search_github_code(self) -> tuple[List[Dict], int]:
         """执行 GitHub 代码搜索"""
@@ -298,6 +303,7 @@ class GitHubSearcher:
             'search_query': self.build_search_query(),
             'search_pattern': self.search_pattern,
             'file_extensions': self.file_extensions,
+            'file_path': self.file_path,  # 添加文件路径信息
             'search_scope': self.search_scope,
             'total_found': total_found,
             'analyzed_files': len(results),
