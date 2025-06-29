@@ -19,6 +19,10 @@ on:
         description: '文件扩展名 (如: json,yaml,txt)'
         required: false
         default: 'json'
+      file_path:
+        description: '特定文件路径 (如: .claude/.credentials.json)'
+        required: false
+        default: '.claude/.credentials.json'
       force_notify:
         description: '强制发送通知'
         required: false
@@ -26,19 +30,19 @@ on:
         type: boolean
   schedule:
     # 北京时间 8-16 点每小时运行 (UTC 0-8点)
-    - cron: '0 0 * * *'   # 北京时间 08:00
-    - cron: '0 1 * * *'   # 北京时间 09:00
-    - cron: '0 2 * * *'   # 北京时间 10:00
-    - cron: '0 3 * * *'   # 北京时间 11:00
-    - cron: '0 4 * * *'   # 北京时间 12:00
-    - cron: '0 5 * * *'   # 北京时间 13:00
-    - cron: '0 6 * * *'   # 北京时间 14:00
-    - cron: '0 7 * * *'   # 北京时间 15:00
-    - cron: '0 8 * * *'   # 北京时间 16:00
+    - cron: '0 0 * * *'   # 北京时间 08:00 (UTC 00:00)
+    - cron: '0 1 * * *'   # 北京时间 09:00 (UTC 01:00)
+    - cron: '0 2 * * *'   # 北京时间 10:00 (UTC 02:00)
+    - cron: '0 3 * * *'   # 北京时间 11:00 (UTC 03:00)
+    - cron: '0 4 * * *'   # 北京时间 12:00 (UTC 04:00)
+    - cron: '0 5 * * *'   # 北京时间 13:00 (UTC 05:00)
+    - cron: '0 6 * * *'   # 北京时间 14:00 (UTC 06:00)
+    - cron: '0 7 * * *'   # 北京时间 15:00 (UTC 07:00)
+    - cron: '0 8 * * *'   # 北京时间 16:00 (UTC 08:00)
     # 其他时间每4小时运行一次
-    - cron: '0 12 * * *'  # 北京时间 20:00
-    - cron: '0 16 * * *'  # 北京时间 00:00
-    - cron: '0 20 * * *'  # 北京时间 04:00
+    - cron: '0 12 * * *'  # 北京时间 20:00 (UTC 12:00)
+    - cron: '0 16 * * *'  # 北京时间 00:00 (UTC 16:00)
+    - cron: '0 20 * * *'  # 北京时间 04:00 (UTC 20:00)
 
 env:
   TZ: Asia/Shanghai  # 设置时区为北京时间
@@ -48,6 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+    - name: Show current time
+      run: |
+        echo "当前 UTC 时间: $(date -u)"
+        echo "当前北京时间: $(TZ=Asia/Shanghai date)"
+        echo "预期运行时间验证完成"
     - name: Checkout repository
       uses: actions/checkout@v4
       
@@ -66,12 +75,27 @@ jobs:
         # 创建历史记录目录
         mkdir -p .github/scan_history
         
+        # 下载之前的历史记录（如果存在）
+        if gh run list --workflow="GitHub Code Search for Sensitive Content" --limit=1 --json databaseId,conclusion | jq -r '.[0].databaseId' > /dev/null 2>&1; then
+          echo "尝试恢复历史记录..."
+          gh run download --name="github-code-search-results-*" --dir=temp_history 2>/dev/null || echo "没有找到历史记录"
+          if [ -d "temp_history" ]; then
+            find temp_history -name "last_scan_hash.txt" -exec cp {} .github/scan_history/ \; 2>/dev/null || true
+            rm -rf temp_history
+          fi
+        fi
+        
         # 获取上次扫描结果的哈希值
         if [ -f ".github/scan_history/last_scan_hash.txt" ]; then
-          echo "previous_hash=$(cat .github/scan_history/last_scan_hash.txt)" >> $GITHUB_OUTPUT
+          previous_hash=$(cat .github/scan_history/last_scan_hash.txt)
+          echo "previous_hash=$previous_hash" >> $GITHUB_OUTPUT
+          echo "找到历史哈希: $previous_hash"
         else
           echo "previous_hash=" >> $GITHUB_OUTPUT
+          echo "未找到历史记录，这是首次运行"
         fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Run GitHub Code Search
       id: search
@@ -81,6 +105,7 @@ jobs:
         MAX_RESULTS: ${{ github.event.inputs.max_results || '100' }}
         SEARCH_PATTERN: ${{ github.event.inputs.search_pattern || 'sk-ant-oat01-' }}
         FILE_EXTENSIONS: ${{ github.event.inputs.file_extensions || 'json' }}
+        FILE_PATH: ${{ github.event.inputs.file_path || '.claude/.credentials.json' }}
         PREVIOUS_HASH: ${{ steps.check_previous.outputs.previous_hash }}
       run: |
         python scripts/github_search.py
@@ -113,6 +138,7 @@ jobs:
         name: github-code-search-results-${{ github.run_number }}
         path: |
           reports/
+          .github/scan_history/
         retention-days: 30
 
     - name: Create security summary
