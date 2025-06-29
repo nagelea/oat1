@@ -1,4 +1,34 @@
-name: GitHub Code Search for Sensitive Content
+# 提取关键信息
+          python << 'EOF'
+        import json
+        import os
+        
+        try:
+            with open('detailed_report.json', 'r') as f:
+                data = json.load(f)
+            
+            summary = data.get('summary', {})
+            total_found = data.get('total_found', 0)
+            analyzed = data.get('analyzed_files', 0)
+            
+            with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                f.write(f"- **总共发现**: {total_found} 个匹配项\n")
+                f.write(f"- **已分析文件**: {analyzed} 个\n")
+                f.write(f"- **公开仓库**: {summary.get('public_repos', 0)} 个文件\n")
+                f.write(f"- **私有仓库**: {summary.get('private_repos', 0)} 个文件\n")
+                f.write(f"- **总匹配次数**: {summary.get('total_matches', 0)} 次\n")
+                f.write(f"- **涉及仓库数**: {len(summary.get('repositories', []))}\n")
+                f.write(f"- **总提交次数**: {summary.get('total_commits', 0)}\n")
+                f.write(f"- **最老文件**: {summary.get('oldest_file_days', 0)} 天前创建\n")
+                f.write(f"- **最新文件**: {summary.get('newest_file_days', 0)} 天前创建\n")
+                f.write(f"- **涉及作者数**: {len(summary.get('authors', []))}\n\n")
+                
+                if summary.get('public_repos', 0) > 0:
+                    f.write("🚨 **安全警告**: 在公开仓库中发现敏感内容!\n\n")
+                
+                f.write("### 📋 涉及的仓库\n")
+                for repo in summary.get('repositories', [])[:10]:  # 只显示前10个
+                    f.writename: GitHub Code Search for Sensitive Content
 
 on:
   workflow_dispatch:  # 手动触发
@@ -128,27 +158,99 @@ jobs:
                 repo_info = item['repository']
                 file_path = item['path']
                 
-                # 获取文件的最后提交信息
+                # 获取文件的完整提交历史
+                print(f"  📅 获取文件时间信息: {file_path}")
+                
+                # 1. 获取所有相关的提交记录（包括重命名和移动）
                 commits_url = f"https://api.github.com/repos/{repo_info['full_name']}/commits"
-                commits_params = {
+                all_commits_params = {
                     'path': file_path,
-                    'per_page': 1
+                    'per_page': 100  # 获取更多历史记录
                 }
                 
-                commits_response = requests.get(commits_url, headers=headers, params=commits_params)
+                all_commits_response = requests.get(commits_url, headers=headers, params=all_commits_params)
+                commit_history = []
+                first_commit_info = {}
                 last_commit_info = {}
                 
-                if commits_response.status_code == 200:
-                    commits_data = commits_response.json()
-                    if commits_data:
-                        commit = commits_data[0]
+                if all_commits_response.status_code == 200:
+                    all_commits_data = all_commits_response.json()
+                    
+                    if all_commits_data:
+                        # 最后一次修改（最新提交）
+                        latest_commit = all_commits_data[0]
                         last_commit_info = {
-                            'last_modified': commit['commit']['committer']['date'],
-                            'last_commit_sha': commit['sha'],
-                            'last_commit_message': commit['commit']['message'][:100] + '...' if len(commit['commit']['message']) > 100 else commit['commit']['message'],
-                            'last_author': commit['commit']['author']['name'],
-                            'last_author_email': commit['commit']['author']['email']
+                            'last_modified': latest_commit['commit']['committer']['date'],
+                            'last_commit_sha': latest_commit['sha'],
+                            'last_commit_message': latest_commit['commit']['message'][:100] + '...' if len(latest_commit['commit']['message']) > 100 else latest_commit['commit']['message'],
+                            'last_author': latest_commit['commit']['author']['name'],
+                            'last_author_email': latest_commit['commit']['author']['email'],
+                            'last_committer': latest_commit['commit']['committer']['name'],
+                            'last_committer_date': latest_commit['commit']['committer']['date']
                         }
+                        
+                        # 首次创建（最早提交）
+                        oldest_commit = all_commits_data[-1]
+                        first_commit_info = {
+                            'first_created': oldest_commit['commit']['author']['date'],
+                            'first_commit_sha': oldest_commit['sha'],
+                            'first_commit_message': oldest_commit['commit']['message'][:100] + '...' if len(oldest_commit['commit']['message']) > 100 else oldest_commit['commit']['message'],
+                            'first_author': oldest_commit['commit']['author']['name'],
+                            'first_author_email': oldest_commit['commit']['author']['email'],
+                            'creation_committer': oldest_commit['commit']['committer']['name'],
+                            'creation_committer_date': oldest_commit['commit']['committer']['date']
+                        }
+                        
+                        # 构建修改历史
+                        for commit in all_commits_data[:10]:  # 只取前10次修改
+                            commit_history.append({
+                                'sha': commit['sha'][:8],
+                                'date': commit['commit']['author']['date'],
+                                'author': commit['commit']['author']['name'],
+                                'message': commit['commit']['message'][:50] + '...' if len(commit['commit']['message']) > 50 else commit['commit']['message'],
+                                'committer_date': commit['commit']['committer']['date']
+                            })
+                
+                # 2. 尝试获取文件的详细统计信息
+                file_stats = {}
+                try:
+                    # 获取文件的贡献者统计
+                    contributors_url = f"https://api.github.com/repos/{repo_info['full_name']}/stats/contributors"
+                    contributors_response = requests.get(contributors_url, headers=headers)
+                    
+                    # 注意：这个 API 可能需要时间生成统计，第一次调用可能返回 202
+                    if contributors_response.status_code == 200:
+                        contributors_data = contributors_response.json()
+                        total_contributors = len(contributors_data) if contributors_data else 0
+                        file_stats['total_contributors'] = total_contributors
+                except:
+                    pass
+                
+                # 3. 获取文件的具体变更信息
+                file_changes = {}
+                if all_commits_data:
+                    try:
+                        # 获取最近一次提交的详细信息，包括文件变更
+                        commit_detail_url = f"https://api.github.com/repos/{repo_info['full_name']}/commits/{all_commits_data[0]['sha']}"
+                        commit_detail_response = requests.get(commit_detail_url, headers=headers)
+                        
+                        if commit_detail_response.status_code == 200:
+                            commit_detail = commit_detail_response.json()
+                            files_changed = commit_detail.get('files', [])
+                            
+                            # 查找当前文件的变更信息
+                            for file_change in files_changed:
+                                if file_change.get('filename') == file_path:
+                                    file_changes = {
+                                        'additions': file_change.get('additions', 0),
+                                        'deletions': file_change.get('deletions', 0),
+                                        'changes': file_change.get('changes', 0),
+                                        'status': file_change.get('status', 'unknown'),  # added, modified, deleted, renamed
+                                        'previous_filename': file_change.get('previous_filename')
+                                    }
+                                    break
+                    except:
+                        pass
                 
                 # 获取文件内容以计算匹配次数（注意：这会消耗更多API调用）
                 content_url = item['url']
@@ -186,7 +288,15 @@ jobs:
                         'size': file_size,
                         'match_count': match_count
                     },
-                    'commit_info': last_commit_info,
+                    'time_info': {
+                        'first_commit': first_commit_info,
+                        'last_commit': last_commit_info,
+                        'commit_history': commit_history,
+                        'total_commits': len(commit_history),
+                        'file_age_days': None  # 将在后面计算
+                    },
+                    'change_info': file_changes,
+                    'stats': file_stats,
                     'found_at': datetime.now().isoformat()
                 }
                 
@@ -195,10 +305,22 @@ jobs:
                 return None
         
         def generate_reports(results, total_found):
+            # 计算文件年龄等额外信息
+            for result in results:
+                time_info = result.get('time_info', {})
+                first_commit = time_info.get('first_commit', {})
+                if first_commit.get('first_created'):
+                    try:
+                        created_date = parser.parse(first_commit['first_created'])
+                        file_age = (datetime.now(created_date.tzinfo) - created_date).days
+                        time_info['file_age_days'] = file_age
+                    except:
+                        pass
+            
             # 生成文本报告
             with open('search_results.txt', 'w', encoding='utf-8') as f:
                 f.write(f"GitHub 代码搜索结果 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 60 + "\n")
+                f.write("=" * 80 + "\n")
                 f.write(f"搜索查询: sk-ant-oat01- language:json\n")
                 f.write(f"总共找到: {total_found} 个结果\n")
                 f.write(f"已分析: {len(results)} 个文件\n\n")
@@ -211,7 +333,10 @@ jobs:
                     for i, result in enumerate(results, 1):
                         repo = result['repository']
                         file_info = result['file']
-                        commit = result['commit_info']
+                        time_info = result.get('time_info', {})
+                        first_commit = time_info.get('first_commit', {})
+                        last_commit = time_info.get('last_commit', {})
+                        change_info = result.get('change_info', {})
                         
                         f.write(f"{i}. 仓库: {repo['full_name']}\n")
                         f.write(f"   文件: {file_info['path']}\n")
@@ -219,17 +344,51 @@ jobs:
                         f.write(f"   仓库类型: {'私有' if repo['private'] else '公开'}\n")
                         f.write(f"   文件大小: {file_info['size']} bytes\n")
                         f.write(f"   匹配次数: {file_info['match_count']}\n")
-                        f.write(f"   仓库描述: {repo['description']}\n")
-                        f.write(f"   主要语言: {repo['language']}\n")
-                        f.write(f"   Stars: {repo['stars']}, Forks: {repo['forks']}\n")
                         
-                        if commit:
-                            f.write(f"   最后修改: {commit.get('last_modified', 'N/A')}\n")
-                            f.write(f"   最后提交: {commit.get('last_commit_sha', 'N/A')[:8]}\n")
-                            f.write(f"   提交作者: {commit.get('last_author', 'N/A')}\n")
-                            f.write(f"   提交消息: {commit.get('last_commit_message', 'N/A')}\n")
+                        # 详细时间信息
+                        f.write(f"\n   📅 时间信息:\n")
+                        if first_commit:
+                            f.write(f"   ├─ 首次创建: {first_commit.get('first_created', 'N/A')}\n")
+                            f.write(f"   ├─ 创建作者: {first_commit.get('first_author', 'N/A')}\n")
+                            f.write(f"   ├─ 创建提交: {first_commit.get('first_commit_sha', 'N/A')[:8]}\n")
+                            f.write(f"   ├─ 创建消息: {first_commit.get('first_commit_message', 'N/A')}\n")
                         
-                        f.write("\n" + "-" * 40 + "\n\n")
+                        if last_commit:
+                            f.write(f"   ├─ 最后修改: {last_commit.get('last_modified', 'N/A')}\n")
+                            f.write(f"   ├─ 修改作者: {last_commit.get('last_author', 'N/A')}\n")
+                            f.write(f"   ├─ 最新提交: {last_commit.get('last_commit_sha', 'N/A')[:8]}\n")
+                            f.write(f"   ├─ 提交消息: {last_commit.get('last_commit_message', 'N/A')}\n")
+                        
+                        file_age = time_info.get('file_age_days')
+                        if file_age is not None:
+                            f.write(f"   ├─ 文件年龄: {file_age} 天\n")
+                        
+                        total_commits = time_info.get('total_commits', 0)
+                        f.write(f"   └─ 总提交数: {total_commits}\n")
+                        
+                        # 变更信息
+                        if change_info:
+                            f.write(f"\n   📊 最近变更:\n")
+                            f.write(f"   ├─ 状态: {change_info.get('status', 'N/A')}\n")
+                            f.write(f"   ├─ 新增行数: {change_info.get('additions', 0)}\n")
+                            f.write(f"   ├─ 删除行数: {change_info.get('deletions', 0)}\n")
+                            f.write(f"   └─ 总变更行数: {change_info.get('changes', 0)}\n")
+                            if change_info.get('previous_filename'):
+                                f.write(f"   └─ 原文件名: {change_info['previous_filename']}\n")
+                        
+                        # 修改历史
+                        commit_history = time_info.get('commit_history', [])
+                        if commit_history:
+                            f.write(f"\n   📝 最近修改历史:\n")
+                            for j, commit in enumerate(commit_history[:5], 1):
+                                f.write(f"   {j}. {commit['date'][:10]} - {commit['author']} - {commit['message']}\n")
+                        
+                        f.write(f"\n   🏢 仓库信息:\n")
+                        f.write(f"   ├─ 描述: {repo['description']}\n")
+                        f.write(f"   ├─ 主要语言: {repo['language']}\n")
+                        f.write(f"   └─ Stars: {repo['stars']}, Forks: {repo['forks']}\n")
+                        
+                        f.write("\n" + "=" * 80 + "\n\n")
             
             # 生成 JSON 报告
             report_data = {
@@ -242,7 +401,17 @@ jobs:
                     'public_repos': sum(1 for r in results if not r['repository']['private']),
                     'private_repos': sum(1 for r in results if r['repository']['private']),
                     'total_matches': sum(r['file']['match_count'] for r in results),
-                    'repositories': list(set(r['repository']['full_name'] for r in results))
+                    'repositories': list(set(r['repository']['full_name'] for r in results)),
+                    'oldest_file_days': max((r.get('time_info', {}).get('file_age_days', 0) for r in results), default=0),
+                    'newest_file_days': min((r.get('time_info', {}).get('file_age_days', float('inf')) for r in results if r.get('time_info', {}).get('file_age_days') is not None), default=0),
+                    'total_commits': sum(r.get('time_info', {}).get('total_commits', 0) for r in results),
+                    'authors': list(set(
+                        author for r in results 
+                        for author in [
+                            r.get('time_info', {}).get('first_commit', {}).get('first_author'),
+                            r.get('time_info', {}).get('last_commit', {}).get('last_author')
+                        ] if author
+                    ))
                 }
             }
             
@@ -305,7 +474,11 @@ jobs:
                 f.write(f"- **公开仓库**: {summary.get('public_repos', 0)} 个文件\n")
                 f.write(f"- **私有仓库**: {summary.get('private_repos', 0)} 个文件\n")
                 f.write(f"- **总匹配次数**: {summary.get('total_matches', 0)} 次\n")
-                f.write(f"- **涉及仓库数**: {len(summary.get('repositories', []))}\n\n")
+                f.write(f"- **涉及仓库数**: {len(summary.get('repositories', []))}\n")
+                f.write(f"- **总提交次数**: {summary.get('total_commits', 0)}\n")
+                f.write(f"- **最老文件**: {summary.get('oldest_file_days', 0)} 天前创建\n")
+                f.write(f"- **最新文件**: {summary.get('newest_file_days', 0)} 天前创建\n")
+                f.write(f"- **涉及作者数**: {len(summary.get('authors', []))}\n\n")
                 
                 if summary.get('public_repos', 0) > 0:
                     f.write("🚨 **安全警告**: 在公开仓库中发现敏感内容!\n\n")
@@ -316,6 +489,15 @@ jobs:
                 
                 if len(summary.get('repositories', [])) > 10:
                     f.write(f"- ... 还有 {len(summary.get('repositories', [])) - 10} 个仓库\n")
+                
+                # 显示涉及的作者
+                authors = summary.get('authors', [])
+                if authors:
+                    f.write(f"\n### 👥 涉及的作者 (前10位)\n")
+                    for author in authors[:10]:
+                        f.write(f"- {author}\n")
+                    if len(authors) > 10:
+                        f.write(f"- ... 还有 {len(authors) - 10} 位作者\n")
         except Exception as e:
             print(f"生成摘要失败: {e}")
         EOF
