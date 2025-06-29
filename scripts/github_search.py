@@ -21,7 +21,7 @@ class GitHubSearcher:
         self.max_results = int(os.environ.get('MAX_RESULTS', '100'))
         self.search_pattern = os.environ.get('SEARCH_PATTERN', 'sk-ant-oat01-')
         self.file_extensions = os.environ.get('FILE_EXTENSIONS', 'json').split(',')
-        self.file_path = os.environ.get('FILE_PATH', '')  # 新增：特定文件路径
+        self.use_regex = os.environ.get('USE_REGEX', 'true').lower() == 'true'
         
         if not self.token:
             raise ValueError("❌ GITHUB_TOKEN 未设置")
@@ -37,28 +37,24 @@ class GitHubSearcher:
     
     def build_search_query(self) -> str:
         """构建搜索查询"""
-        query_parts = [self.search_pattern]
-        
-        # 添加特定文件路径（如果指定）
-        if self.file_path:
-            query_parts.append(f'path:{self.file_path}')
+        # 构建语言查询
+        if len(self.file_extensions) == 1:
+            language_query = f'language:{self.file_extensions[0]}'
         else:
-            # 如果没有指定特定路径，使用文件扩展名
-            if len(self.file_extensions) == 1:
-                language_query = f'language:{self.file_extensions[0]}'
-            else:
-                # 多个扩展名用 OR 连接
-                ext_queries = [f'extension:{ext.strip()}' for ext in self.file_extensions]
-                language_query = ' OR '.join(ext_queries)
-                if len(ext_queries) > 1:
-                    language_query = f'({language_query})'
-            query_parts.append(language_query)
+            # 多个扩展名用 OR 连接
+            ext_queries = [f'extension:{ext.strip()}' for ext in self.file_extensions]
+            language_query = ' OR '.join(ext_queries)
+            if len(ext_queries) > 1:
+                language_query = f'({language_query})'
         
-        # 添加搜索范围
+        base_query = f'{self.search_pattern} {language_query}'
+        
         if self.search_scope:
-            query_parts.append(self.search_scope)
-        
-        return ' '.join(query_parts)
+            query = f'{base_query} {self.search_scope}'
+        else:
+            query = base_query
+            
+        return query
     
     def search_github_code(self) -> tuple[List[Dict], int]:
         """执行 GitHub 代码搜索"""
@@ -156,7 +152,9 @@ class GitHubSearcher:
                     'name': item['name'],
                     'html_url': item['html_url'],
                     'size': content_info.get('size', 0),
-                    'match_count': content_info.get('match_count', 0)
+                    'match_count': content_info.get('match_count', 0),
+                    'full_keys_found': len(content_info.get('full_keys', [])),  # 完整密钥数量
+                    'has_complete_keys': len(content_info.get('full_keys', [])) > 0  # 是否有完整密钥
                 },
                 'time_info': time_info,
                 'change_info': change_info,
@@ -238,7 +236,7 @@ class GitHubSearcher:
     
     def _get_content_info(self, item: Dict) -> Dict:
         """获取文件内容信息"""
-        content_info = {'size': 0, 'match_count': 0}
+        content_info = {'size': 0, 'match_count': 0, 'full_keys': []}
         
         try:
             content_url = item['url']
@@ -251,8 +249,28 @@ class GitHubSearcher:
                 if content_data.get('content'):
                     try:
                         decoded_content = base64.b64decode(content_data['content']).decode('utf-8')
-                        content_info['match_count'] = decoded_content.count(self.search_pattern)
-                    except:
+                        
+                        if self.use_regex:
+                            # 使用正则表达式匹配完整的 Anthropic API Key
+                            import re
+                            
+                            # Anthropic API Key 完整格式：sk-ant-oat01-[64位字符]
+                            anthropic_pattern = r'sk-ant-oat01-[A-Za-z0-9_-]{64}'
+                            
+                            matches = re.findall(anthropic_pattern, decoded_content)
+                            content_info['match_count'] = len(matches)
+                            content_info['full_keys'] = matches[:5]  # 只保存前5个，避免泄露太多
+                            
+                            # 同时检查基本模式
+                            basic_matches = decoded_content.count(self.search_pattern)
+                            if basic_matches > content_info['match_count']:
+                                print(f"    📊 发现 {basic_matches} 个基本匹配，{content_info['match_count']} 个完整密钥")
+                        else:
+                            # 基本字符串匹配
+                            content_info['match_count'] = decoded_content.count(self.search_pattern)
+                            
+                    except Exception as e:
+                        print(f"    ⚠️ 内容解析失败: {e}")
                         pass
         
         except Exception as e:
@@ -303,7 +321,7 @@ class GitHubSearcher:
             'search_query': self.build_search_query(),
             'search_pattern': self.search_pattern,
             'file_extensions': self.file_extensions,
-            'file_path': self.file_path,  # 添加文件路径信息
+            'use_regex': self.use_regex,  # 记录是否使用了正则匹配
             'search_scope': self.search_scope,
             'total_found': total_found,
             'analyzed_files': len(results),
