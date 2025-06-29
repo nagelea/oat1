@@ -73,30 +73,83 @@ jobs:
     - name: Check previous results
       id: check_previous
       run: |
+        echo "🔍 检查历史记录..."
+        
         # 创建历史记录目录
         mkdir -p .github/scan_history
         
-        # 下载之前的历史记录（如果存在）
-        if gh run list --workflow="GitHub Code Search for Sensitive Content" --limit=1 --json databaseId,conclusion | jq -r '.[0].databaseId' > /dev/null 2>&1; then
-          echo "尝试恢复历史记录..."
-          gh run download --name="github-code-search-results-*" --dir=temp_history 2>/dev/null || echo "没有找到历史记录"
-          if [ -d "temp_history" ]; then
-            find temp_history -name "last_scan_hash.txt" -exec cp {} .github/scan_history/ \; 2>/dev/null || true
-            rm -rf temp_history
+        # 方法1: 尝试从 Artifacts 恢复最近的历史
+        echo "📁 尝试从 Artifacts 恢复历史..."
+        
+        # 获取最近的 workflow run ID（不使用 gh CLI，直接用 API）
+        RECENT_RUN=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs?per_page=5&status=completed" \
+          | jq -r '.workflow_runs[] | select(.name == "GitHub Code Search for Sensitive Content") | .id' | head -1)
+        
+        echo "最近的运行 ID: $RECENT_RUN"
+        
+        if [ ! -z "$RECENT_RUN" ] && [ "$RECENT_RUN" != "null" ]; then
+          # 获取 artifacts
+          ARTIFACTS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RECENT_RUN/artifacts")
+          
+          # 查找包含历史记录的 artifact
+          ARTIFACT_URL=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | startswith("github-code-search-results-")) | .archive_download_url' | head -1)
+          
+          if [ ! -z "$ARTIFACT_URL" ] && [ "$ARTIFACT_URL" != "null" ]; then
+            echo "📦 找到 artifact，正在下载..."
+            
+            # 下载并解压 artifact
+            curl -s -L -H "Authorization: token $GITHUB_TOKEN" "$ARTIFACT_URL" -o artifact.zip
+            
+            if [ -f "artifact.zip" ]; then
+              unzip -q artifact.zip -d temp_artifact/
+              
+              # 恢复历史文件
+              if [ -f "temp_artifact/.github/scan_history/last_scan_hash.txt" ]; then
+                cp temp_artifact/.github/scan_history/last_scan_hash.txt .github/scan_history/
+                echo "✅ 成功恢复主历史文件"
+              fi
+              
+              # 恢复其他历史文件
+              find temp_artifact/.github/scan_history/ -name "*.txt" -exec cp {} .github/scan_history/ \; 2>/dev/null || true
+              
+              # 清理
+              rm -rf temp_artifact/ artifact.zip
+            fi
           fi
         fi
         
-        # 获取上次扫描结果的哈希值
+        # 方法2: 从当前仓库文件中查找（如果历史文件被提交过）
+        if [ ! -f ".github/scan_history/last_scan_hash.txt" ]; then
+          echo "📋 尝试从仓库历史恢复..."
+          
+          # 检查是否有之前的历史文件
+          if git log --oneline --all -- .github/scan_history/ >/dev/null 2>&1; then
+            echo "发现历史提交记录"
+            # 尝试恢复最近的历史文件
+            git checkout HEAD~1 -- .github/scan_history/ 2>/dev/null || true
+          fi
+        fi
+        
+        # 方法3: 使用 repository variables 作为备份
+        # GitHub Actions 可以设置 repository variables 来持久化数据
+        
+        # 读取历史哈希
+        previous_hash=""
         if [ -f ".github/scan_history/last_scan_hash.txt" ]; then
           previous_hash=$(cat .github/scan_history/last_scan_hash.txt)
-          echo "previous_hash=$previous_hash" >> $GITHUB_OUTPUT
-          echo "找到历史哈希: $previous_hash"
+          echo "✅ 找到历史哈希: ${previous_hash:0:12}..."
         else
-          echo "previous_hash=" >> $GITHUB_OUTPUT
-          echo "未找到历史记录，这是首次运行"
+          echo "⚠️ 未找到历史记录"
         fi
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+        # 输出给下一步使用
+        echo "previous_hash=$previous_hash" >> $GITHUB_OUTPUT
+        
+        # 调试信息
+        echo "DEBUG: 历史目录内容:"
+        ls -la .github/scan_history/ || echo "历史目录为空"
 
     - name: Run GitHub Code Search
       id: search
