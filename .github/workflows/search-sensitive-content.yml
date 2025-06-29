@@ -1,0 +1,209 @@
+name: Search Sensitive Content in JSON Files
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 2 * * *'  # 每天凌晨2点运行
+
+jobs:
+  search-sensitive-content:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 获取完整的 git 历史
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Search for sensitive content in JSON files
+      run: |
+        echo "🔍 搜索包含敏感内容的 JSON 文件..."
+        echo "======================================="
+        
+        # 创建结果文件
+        touch search_results.txt
+        echo "搜索结果 - $(date)" > search_results.txt
+        echo "=======================================" >> search_results.txt
+        
+        # 搜索包含特定模式的 JSON 文件
+        found_files=$(find . -name "*.json" -type f -exec grep -l "sk-ant-oat01-" {} \; 2>/dev/null || true)
+        
+        if [ -z "$found_files" ]; then
+          echo "✅ 未发现包含敏感内容的 JSON 文件"
+          echo "✅ 未发现包含敏感内容的 JSON 文件" >> search_results.txt
+        else
+          echo "⚠️  发现以下文件包含敏感内容:"
+          echo "⚠️  发现以下文件包含敏感内容:" >> search_results.txt
+          echo "" >> search_results.txt
+          
+          for file in $found_files; do
+            echo "文件: $file"
+            echo "文件: $file" >> search_results.txt
+            
+            # 获取文件的最后修改时间
+            last_modified=$(git log -1 --format="%cd" --date=format:'%Y-%m-%d %H:%M:%S' -- "$file" 2>/dev/null || echo "未知")
+            echo "  最后修改时间: $last_modified"
+            echo "  最后修改时间: $last_modified" >> search_results.txt
+            
+            # 获取文件的创建时间（首次提交时间）
+            first_commit=$(git log --follow --format="%cd" --date=format:'%Y-%m-%d %H:%M:%S' -- "$file" | tail -1 2>/dev/null || echo "未知")
+            echo "  首次创建时间: $first_commit"
+            echo "  首次创建时间: $first_commit" >> search_results.txt
+            
+            # 获取文件大小
+            file_size=$(du -h "$file" | cut -f1)
+            echo "  文件大小: $file_size"
+            echo "  文件大小: $file_size" >> search_results.txt
+            
+            # 显示匹配的行数
+            match_count=$(grep -c "sk-ant-oat01-" "$file" 2>/dev/null || echo "0")
+            echo "  匹配行数: $match_count"
+            echo "  匹配行数: $match_count" >> search_results.txt
+            
+            # 显示匹配的具体行（脱敏处理）
+            echo "  匹配内容预览:"
+            echo "  匹配内容预览:" >> search_results.txt
+            grep -n "sk-ant-oat01-" "$file" | head -3 | sed 's/sk-ant-oat01-[^"]*/"[REDACTED_API_KEY]"/g' | while read line; do
+              echo "    $line"
+              echo "    $line" >> search_results.txt
+            done
+            
+            echo ""
+            echo "" >> search_results.txt
+          done
+        fi
+
+    - name: Create detailed report
+      run: |
+        echo "📊 创建详细报告..."
+        
+        # 创建 Python 脚本来生成更详细的报告
+        cat > generate_report.py << 'EOF'
+        import os
+        import json
+        import subprocess
+        from datetime import datetime
+        
+        def get_git_info(file_path):
+            try:
+                # 获取最后修改时间
+                last_modified = subprocess.check_output([
+                    'git', 'log', '-1', '--format=%cd', '--date=iso', '--', file_path
+                ], stderr=subprocess.DEVNULL).decode().strip()
+                
+                # 获取首次提交时间
+                first_commit = subprocess.check_output([
+                    'git', 'log', '--follow', '--format=%cd', '--date=iso', '--', file_path
+                ], stderr=subprocess.DEVNULL).decode().strip().split('\n')[-1]
+                
+                # 获取最后修改的提交哈希和作者
+                commit_info = subprocess.check_output([
+                    'git', 'log', '-1', '--format=%H|%an|%ae', '--', file_path
+                ], stderr=subprocess.DEVNULL).decode().strip().split('|')
+                
+                return {
+                    'last_modified': last_modified,
+                    'first_commit': first_commit,
+                    'last_commit_hash': commit_info[0] if len(commit_info) > 0 else 'N/A',
+                    'last_author_name': commit_info[1] if len(commit_info) > 1 else 'N/A',
+                    'last_author_email': commit_info[2] if len(commit_info) > 2 else 'N/A'
+                }
+            except:
+                return {
+                    'last_modified': 'Unknown',
+                    'first_commit': 'Unknown',
+                    'last_commit_hash': 'N/A',
+                    'last_author_name': 'N/A',
+                    'last_author_email': 'N/A'
+                }
+        
+        def search_sensitive_content():
+            results = []
+            
+            # 搜索所有 JSON 文件
+            for root, dirs, files in os.walk('.'):
+                # 跳过 .git 目录
+                if '.git' in root:
+                    continue
+                    
+                for file in files:
+                    if file.endswith('.json'):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                if 'sk-ant-oat01-' in content:
+                                    git_info = get_git_info(file_path)
+                                    file_stat = os.stat(file_path)
+                                    
+                                    # 计算匹配次数
+                                    match_count = content.count('sk-ant-oat01-')
+                                    
+                                    results.append({
+                                        'file_path': file_path,
+                                        'file_size': file_stat.st_size,
+                                        'match_count': match_count,
+                                        'git_info': git_info
+                                    })
+                        except Exception as e:
+                            print(f"Error reading {file_path}: {e}")
+            
+            return results
+        
+        # 生成报告
+        results = search_sensitive_content()
+        
+        with open('detailed_report.json', 'w', encoding='utf-8') as f:
+            json.dump({
+                'scan_time': datetime.now().isoformat(),
+                'total_files_found': len(results),
+                'results': results
+            }, f, indent=2, ensure_ascii=False)
+        
+        print(f"找到 {len(results)} 个包含敏感内容的文件")
+        for result in results:
+            print(f"\n文件: {result['file_path']}")
+            print(f"  大小: {result['file_size']} bytes")
+            print(f"  匹配次数: {result['match_count']}")
+            print(f"  最后修改: {result['git_info']['last_modified']}")
+            print(f"  首次创建: {result['git_info']['first_commit']}")
+            print(f"  最后提交: {result['git_info']['last_commit_hash']}")
+            print(f"  最后作者: {result['git_info']['last_author_name']} <{result['git_info']['last_author_email']}>")
+        EOF
+        
+        python generate_report.py
+
+    - name: Upload search results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: sensitive-content-search-results
+        path: |
+          search_results.txt
+          detailed_report.json
+        retention-days: 30
+
+    - name: Send notification (optional)
+      if: hashFiles('search_results.txt') && contains(hashFiles('search_results.txt'), 'sensitive')
+      run: |
+        echo "⚠️  检测到敏感内容，请检查上传的报告文件"
+        echo "可以在 Actions 的 Artifacts 中下载详细报告"
+        
+        # 如果配置了 Webhook，可以发送通知
+        # curl -X POST -H 'Content-type: application/json' \
+        #   --data '{"text":"⚠️ GitHub仓库中检测到敏感API密钥，请立即检查！"}' \
+        #   ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Security recommendations
+      run: |
+        echo "🔒 安全建议:"
+        echo "1. 如果发现敏感内容，请立即更换相关的 API 密钥"
+        echo "2. 使用 git filter-branch 或 BFG Repo-Cleaner 清理历史记录"
+        echo "3. 将敏感信息移动到环境变量或 GitHub Secrets"
+        echo "4. 添加 .gitignore 规则防止未来误提交"
+        echo "5. 考虑使用 pre-commit hooks 进行提交前检查"
