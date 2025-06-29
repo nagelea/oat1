@@ -111,13 +111,6 @@ class BarkNotifier:
     def send_notification(self, title, message, level="active"):
         """发送 Bark 通知"""
         try:
-            # 构建 Bark API URL
-            # 格式: https://api.day.app/[KEY]/[标题]/[内容]?level=[级别]&sound=[声音]
-            
-            # URL 编码
-            encoded_title = quote(title)
-            encoded_message = quote(message)
-            
             # 根据风险等级设置通知级别和声音
             if "CRITICAL" in message or "🚨" in title:
                 level = "critical"
@@ -132,13 +125,17 @@ class BarkNotifier:
                 level = "active"
                 sound = "birdsong"
             
-            # 构建完整URL
+            # 确保服务器地址格式正确
             if self.bark_server.endswith('/'):
                 self.bark_server = self.bark_server.rstrip('/')
             
-            # 方法1: 使用路径参数 (推荐)
-            url = f"{self.bark_server}/{self.bark_key}/{encoded_title}/{encoded_message}"
-            params = {
+            # 方法1: 使用 POST 请求 (推荐，避免 URL 长度限制)
+            url = f"{self.bark_server}/{self.bark_key}"
+            
+            # 构建请求数据
+            data = {
+                'title': title,
+                'body': message,
                 'level': level,
                 'sound': sound,
                 'group': 'GitHub安全扫描',
@@ -147,23 +144,35 @@ class BarkNotifier:
             
             print(f"📤 发送 Bark 通知...")
             print(f"🔗 URL: {url}")
-            print(f"📋 参数: {params}")
+            print(f"📋 数据: {{'title': '{title[:30]}...', 'level': '{level}', 'sound': '{sound}'}}")
             
-            response = requests.get(url, params=params, timeout=10)
+            # 使用 POST 请求发送
+            response = requests.post(url, json=data, timeout=10)
             
             if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 200:
-                    print(f"✅ Bark 通知发送成功!")
-                    print(f"📱 消息: {result.get('message', 'Success')}")
-                    return True
-                else:
-                    print(f"❌ Bark 服务器返回错误: {result}")
-                    return False
+                try:
+                    result = response.json()
+                    if result.get('code') == 200:
+                        print(f"✅ Bark 通知发送成功!")
+                        print(f"📱 消息: {result.get('message', 'Success')}")
+                        return True
+                    else:
+                        print(f"❌ Bark 服务器返回错误: {result}")
+                        # 尝试备用方法
+                        return self._send_notification_fallback(title, message, level, sound)
+                except json.JSONDecodeError:
+                    # 如果响应不是 JSON，可能是成功的
+                    if 'success' in response.text.lower() or response.status_code == 200:
+                        print(f"✅ Bark 通知发送成功! (非JSON响应)")
+                        return True
+                    else:
+                        print(f"❌ 响应解析失败: {response.text}")
+                        return self._send_notification_fallback(title, message, level, sound)
             else:
                 print(f"❌ HTTP 请求失败: {response.status_code}")
                 print(f"📄 响应内容: {response.text}")
-                return False
+                # 尝试备用方法
+                return self._send_notification_fallback(title, message, level, sound)
                 
         except requests.exceptions.Timeout:
             print("❌ 请求超时，请检查网络连接")
@@ -174,6 +183,62 @@ class BarkNotifier:
         except Exception as e:
             print(f"❌ 发送通知失败: {e}")
             return False
+    
+    def _send_notification_fallback(self, title, message, level, sound):
+        """备用发送方法 - 使用 GET 请求简化版本"""
+        try:
+            print("🔄 尝试备用发送方法...")
+            
+            # 简化消息内容以避免 URL 过长
+            short_message = self._create_short_message(title, message)
+            
+            # URL 编码
+            from urllib.parse import quote
+            encoded_title = quote(title.encode('utf-8'))
+            encoded_message = quote(short_message.encode('utf-8'))
+            
+            # 构建简化的 GET 请求
+            url = f"{self.bark_server}/{self.bark_key}/{encoded_title}/{encoded_message}"
+            params = {
+                'level': level,
+                'sound': sound
+            }
+            
+            print(f"🔗 备用 URL: {url[:100]}...")
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                print(f"✅ 备用方法发送成功!")
+                return True
+            else:
+                print(f"❌ 备用方法也失败: {response.status_code}")
+                print(f"📄 响应: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 备用方法失败: {e}")
+            return False
+    
+    def _create_short_message(self, title, message):
+        """创建简化的消息内容"""
+        lines = message.split('\n')
+        short_lines = []
+        
+        # 保留重要信息
+        for line in lines:
+            if any(keyword in line for keyword in ['扫描时间', '风险等级', '总文件数', '公开仓库', '警告']):
+                short_lines.append(line)
+            elif len(short_lines) < 5:  # 限制行数
+                short_lines.append(line)
+        
+        short_message = '\n'.join(short_lines)
+        
+        # 限制总长度
+        if len(short_message) > 500:
+            short_message = short_message[:500] + '...'
+        
+        return short_message
     
     def send_test_notification(self):
         """发送测试通知"""
