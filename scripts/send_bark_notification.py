@@ -81,6 +81,13 @@ class BarkNotifier:
                 message_parts.append(f"  • 🔒 私有仓库: {private_files} 个")
             message_parts.append(f"  • 总匹配次数: {total_matches}")
             
+            # 完整密钥统计
+            complete_keys_info = self._get_complete_keys_info(raw_data)
+            if complete_keys_info['total_complete_keys'] > 0:
+                message_parts.append(f"  • 🔑 完整密钥: {complete_keys_info['total_complete_keys']} 个")
+                if complete_keys_info['public_complete_keys'] > 0:
+                    message_parts.append(f"  • ⚠️ 公开仓库中的完整密钥: {complete_keys_info['public_complete_keys']} 个")
+            
             # 最新文件信息
             latest_files_info = self._get_latest_files_info(raw_data)
             if latest_files_info:
@@ -100,6 +107,8 @@ class BarkNotifier:
             # 风险提醒
             if public_files > 0:
                 message_parts.append(f"\n⚠️ 警告: 在公开仓库中发现敏感内容!")
+                if complete_keys_info['public_complete_keys'] > 0:
+                    message_parts.append(f"🚨 发现 {complete_keys_info['public_complete_keys']} 个完整API密钥在公开仓库!")
                 message_parts.append(f"请立即检查并采取行动!")
         else:
             message_parts.append("✅ 本次扫描未发现新的敏感内容")
@@ -114,6 +123,30 @@ class BarkNotifier:
         message = '\n'.join(message_parts)
         
         return title, message
+    
+    def _get_complete_keys_info(self, raw_data):
+        """获取完整密钥信息"""
+        try:
+            results = raw_data.get('results', [])
+            total_complete_keys = 0
+            public_complete_keys = 0
+            
+            for result in results:
+                file_info = result.get('file', {})
+                complete_keys = file_info.get('full_keys_found', 0)
+                is_public = not result.get('repository', {}).get('private', True)
+                
+                total_complete_keys += complete_keys
+                if is_public and complete_keys > 0:
+                    public_complete_keys += complete_keys
+            
+            return {
+                'total_complete_keys': total_complete_keys,
+                'public_complete_keys': public_complete_keys
+            }
+        except Exception as e:
+            print(f"⚠️ 获取完整密钥信息失败: {e}")
+            return {'total_complete_keys': 0, 'public_complete_keys': 0}
     
     def _get_latest_files_info(self, raw_data):
         """获取最新文件信息"""
@@ -166,7 +199,12 @@ class BarkNotifier:
                 repo_indicator = "🌐" if file_info['is_public'] else "🔒"
                 file_display = f"{repo_indicator} {file_info['repo']}/{file_info['file']}"
                 time_display = f"({file_info['last_modified_str']}, {file_info['time_ago']})"
-                match_display = f"[{file_info['matches']}次]"
+                
+                # 显示匹配信息
+                if file_info.get('has_complete_keys', False):
+                    match_display = f"[🔑{file_info.get('full_keys_found', 0)}完整+{file_info['matches']}总计]"
+                else:
+                    match_display = f"[{file_info['matches']}次]"
                 
                 # 限制长度以适合通知
                 if len(file_display) > 40:
