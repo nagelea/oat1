@@ -19,8 +19,29 @@ on:
         description: '文件扩展名 (如: json,yaml,txt)'
         required: false
         default: 'json'
+      force_notify:
+        description: '强制发送通知'
+        required: false
+        default: 'false'
+        type: boolean
   schedule:
-    - cron: '0 2 * * *'  # 每天凌晨2点运行
+    # 北京时间 8-16 点每小时运行 (UTC 0-8点)
+    - cron: '0 0 * * *'   # 北京时间 08:00
+    - cron: '0 1 * * *'   # 北京时间 09:00
+    - cron: '0 2 * * *'   # 北京时间 10:00
+    - cron: '0 3 * * *'   # 北京时间 11:00
+    - cron: '0 4 * * *'   # 北京时间 12:00
+    - cron: '0 5 * * *'   # 北京时间 13:00
+    - cron: '0 6 * * *'   # 北京时间 14:00
+    - cron: '0 7 * * *'   # 北京时间 15:00
+    - cron: '0 8 * * *'   # 北京时间 16:00
+    # 其他时间每4小时运行一次
+    - cron: '0 12 * * *'  # 北京时间 20:00
+    - cron: '0 16 * * *'  # 北京时间 00:00
+    - cron: '0 20 * * *'  # 北京时间 04:00
+
+env:
+  TZ: Asia/Shanghai  # 设置时区为北京时间
 
 jobs:
   github-code-search:
@@ -39,19 +60,51 @@ jobs:
       run: |
         pip install requests python-dateutil
 
+    - name: Check previous results
+      id: check_previous
+      run: |
+        # 创建历史记录目录
+        mkdir -p .github/scan_history
+        
+        # 获取上次扫描结果的哈希值
+        if [ -f ".github/scan_history/last_scan_hash.txt" ]; then
+          echo "previous_hash=$(cat .github/scan_history/last_scan_hash.txt)" >> $GITHUB_OUTPUT
+        else
+          echo "previous_hash=" >> $GITHUB_OUTPUT
+        fi
+
     - name: Run GitHub Code Search
+      id: search
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SEARCH_SCOPE: ${{ github.event.inputs.search_scope }}
         MAX_RESULTS: ${{ github.event.inputs.max_results || '100' }}
         SEARCH_PATTERN: ${{ github.event.inputs.search_pattern || 'sk-ant-oat01-' }}
         FILE_EXTENSIONS: ${{ github.event.inputs.file_extensions || 'json' }}
+        PREVIOUS_HASH: ${{ steps.check_previous.outputs.previous_hash }}
       run: |
         python scripts/github_search.py
 
     - name: Generate reports
       run: |
         python scripts/generate_reports.py
+
+    - name: Check for new findings
+      id: check_new
+      run: |
+        python scripts/check_new_findings.py
+
+    - name: Send Bark notification
+      if: steps.check_new.outputs.has_new_findings == 'true' || github.event.inputs.force_notify == 'true'
+      env:
+        BARK_KEY: ${{ secrets.BARK_KEY }}
+        BARK_SERVER: ${{ secrets.BARK_SERVER }}
+      run: |
+        python scripts/send_bark_notification.py
+
+    - name: Update scan history
+      run: |
+        python scripts/update_scan_history.py
 
     - name: Upload search results
       uses: actions/upload-artifact@v4
