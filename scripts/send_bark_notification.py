@@ -81,6 +81,13 @@ class BarkNotifier:
                 message_parts.append(f"  • 🔒 私有仓库: {private_files} 个")
             message_parts.append(f"  • 总匹配次数: {total_matches}")
             
+            # 最新文件信息
+            latest_files_info = self._get_latest_files_info(raw_data)
+            if latest_files_info:
+                message_parts.append(f"\n📄 最新发现文件:")
+                for file_info in latest_files_info:
+                    message_parts.append(f"  • {file_info}")
+            
             # 涉及的仓库
             repositories = analysis.get('repositories', [])
             if repositories:
@@ -107,6 +114,65 @@ class BarkNotifier:
         message = '\n'.join(message_parts)
         
         return title, message
+    
+    def _get_latest_files_info(self, raw_data):
+        """获取最新文件信息"""
+        try:
+            results = raw_data.get('results', [])
+            if not results:
+                return []
+            
+            # 按最后修改时间排序，获取最新的文件
+            files_with_time = []
+            for result in results:
+                time_info = result.get('time_info', {})
+                last_commit = time_info.get('last_commit', {})
+                last_modified = last_commit.get('last_modified')
+                
+                if last_modified:
+                    try:
+                        # 解析时间
+                        from dateutil import parser
+                        mod_time = parser.parse(last_modified)
+                        
+                        file_info = {
+                            'repo': result['repository']['full_name'],
+                            'file': result['file']['path'],
+                            'matches': result['file']['match_count'],
+                            'last_modified': mod_time,
+                            'last_modified_str': mod_time.strftime('%m-%d %H:%M'),
+                            'is_public': not result['repository']['private'],
+                            'author': last_commit.get('last_author', 'Unknown')
+                        }
+                        files_with_time.append(file_info)
+                    except:
+                        # 如果时间解析失败，跳过
+                        continue
+            
+            # 按时间排序，最新的在前
+            files_with_time.sort(key=lambda x: x['last_modified'], reverse=True)
+            
+            # 格式化输出，只显示前3个最新的文件
+            latest_files = []
+            for file_info in files_with_time[:3]:
+                repo_indicator = "🌐" if file_info['is_public'] else "🔒"
+                file_display = f"{repo_indicator} {file_info['repo']}/{file_info['file']}"
+                time_display = f"({file_info['last_modified_str']})"
+                match_display = f"[{file_info['matches']}次]"
+                
+                # 限制长度以适合通知
+                if len(file_display) > 40:
+                    parts = file_info['file'].split('/')
+                    filename = parts[-1]
+                    file_display = f"{repo_indicator} {file_info['repo']}/.../{filename}"
+                
+                latest_files.append(f"{file_display} {time_display} {match_display}")
+            
+            return latest_files
+            
+        except Exception as e:
+            print(f"⚠️ 获取最新文件信息失败: {e}")
+            return []
     
     def send_notification(self, title, message, level="active"):
         """发送 Bark 通知"""
