@@ -1,0 +1,143 @@
+# GitHub 敏感内容搜索配置文件
+# config/search_config.yaml
+
+# 搜索模式配置
+search_patterns:
+  # API 密钥模式
+  api_keys:
+    - "sk-ant-oat01-"
+    - "sk-[a-zA-Z0-9]{48}"
+    - "xoxb-[0-9]{11}-[0-9]{11}-[a-zA-Z0-9]{24}"
+    - "ghp_[a-zA-Z0-9]{36}"
+  
+  # 数据库连接字符串
+  database:
+    - "mongodb://"
+    - "mysql://"
+    - "postgresql://"
+    - "redis://"
+  
+  # 云服务密钥
+  cloud_keys:
+    - "AKIA[0-9A-Z]{16}"
+    - "sk_live_[0-9a-zA-Z]{24}"
+
+# 文件类型配置
+file_extensions:
+  config_files:
+    - "json"
+    - "yaml"
+    - "yml"
+    - "toml"
+    - "ini"
+    - "conf"
+  
+  code_files:
+    - "js"
+    - "ts"
+    - "py"
+    - "java"
+    - "go"
+    - "php"
+    - "rb"
+  
+  documentation:
+    - "md"
+    - "txt"
+    - "rst"
+
+# 搜索范围配置
+search_scopes:
+  # 组织范围
+  organizations:
+    - "org:mycompany"
+    - "org:myteam"
+  
+  # 用户范围
+  users:
+    - "user:myusername"
+  
+  # 仓库范围
+  repositories:
+    - "repo:myorg/myrepo"
+
+# 排除配置
+exclusions:
+  # 排除的仓库
+  repositories:
+    - "example-repo"
+    - "test-repo"
+    - "demo-*"
+  
+  # 排除的文件路径
+  file_paths:
+    - "node_modules/"
+    - ".git/"
+    - "vendor/"
+    - "build/"
+    - "dist/"
+  
+  # 排除的文件模式
+  file_patterns:
+    - "*.min.js"
+    - "*.map"
+    - "package-lock.json"
+
+# 报告配置
+reporting:
+  # 输出格式
+  formats:
+    - "txt"
+    - "json"
+    - "csv"
+    - "markdown"
+    - "html"
+  
+  # 详细级别
+  detail_levels:
+    summary: true
+    detailed: true
+    raw_data: true
+  
+  # 通知配置
+  notifications:
+    slack_webhook: "${SLACK_WEBHOOK_URL}"
+    email_recipients:
+      - "security@company.com"
+    
+    # 风险等级阈值
+    alert_thresholds:
+      critical: 1  # 1个公开仓库就告警
+      high: 5      # 5个匹配就告警
+      medium: 10   # 10个匹配就告警
+
+# GitHub API 配置
+github_api:
+  # API 限制
+  rate_limits:
+    requests_per_minute: 30
+    search_requests_per_minute: 10
+    
+  # 重试配置
+  retry:
+    max_attempts: 3
+    backoff_factor: 2
+    timeout: 30
+
+# 安全配置
+security:
+  # 敏感内容处理
+  content_handling:
+    redact_in_reports: true
+    max_preview_length: 50
+    
+  # 历史分析深度
+  analysis_depth:
+    max_commits_per_file: 100
+    max_history_days: 365
+    
+  # 风险评估
+  risk_calculation:
+    public_repo_weight: 10
+    match_count_weight: 1
+    file_age_weight: 0.1
