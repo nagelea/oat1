@@ -19,10 +19,11 @@ on:
         description: '文件扩展名 (如: json,yaml,txt)'
         required: false
         default: 'json'
-      file_path:
-        description: '特定文件路径 (如: .claude/.credentials.json)'
+      use_regex:
+        description: '使用正则表达式匹配完整密钥'
         required: false
-        default: '.claude/.credentials.json'
+        default: 'true'
+        type: boolean
       force_notify:
         description: '强制发送通知'
         required: false
@@ -105,7 +106,7 @@ jobs:
         MAX_RESULTS: ${{ github.event.inputs.max_results || '100' }}
         SEARCH_PATTERN: ${{ github.event.inputs.search_pattern || 'sk-ant-oat01-' }}
         FILE_EXTENSIONS: ${{ github.event.inputs.file_extensions || 'json' }}
-        FILE_PATH: ${{ github.event.inputs.file_path || '.claude/.credentials.json' }}
+        USE_REGEX: ${{ github.event.inputs.use_regex || 'true' }}
         PREVIOUS_HASH: ${{ steps.check_previous.outputs.previous_hash }}
       run: |
         python scripts/github_search.py
