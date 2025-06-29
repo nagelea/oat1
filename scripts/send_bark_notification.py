@@ -124,6 +124,8 @@ class BarkNotifier:
             
             # 按最后修改时间排序，获取最新的文件
             files_with_time = []
+            current_time = datetime.now()
+            
             for result in results:
                 time_info = result.get('time_info', {})
                 last_commit = time_info.get('last_commit', {})
@@ -135,12 +137,17 @@ class BarkNotifier:
                         from dateutil import parser
                         mod_time = parser.parse(last_modified)
                         
+                        # 计算时间差
+                        time_diff = current_time - mod_time.replace(tzinfo=None)
+                        time_ago = self._format_time_ago(time_diff)
+                        
                         file_info = {
                             'repo': result['repository']['full_name'],
                             'file': result['file']['path'],
                             'matches': result['file']['match_count'],
                             'last_modified': mod_time,
                             'last_modified_str': mod_time.strftime('%m-%d %H:%M'),
+                            'time_ago': time_ago,
                             'is_public': not result['repository']['private'],
                             'author': last_commit.get('last_author', 'Unknown')
                         }
@@ -157,7 +164,7 @@ class BarkNotifier:
             for file_info in files_with_time[:3]:
                 repo_indicator = "🌐" if file_info['is_public'] else "🔒"
                 file_display = f"{repo_indicator} {file_info['repo']}/{file_info['file']}"
-                time_display = f"({file_info['last_modified_str']})"
+                time_display = f"({file_info['last_modified_str']}, {file_info['time_ago']})"
                 match_display = f"[{file_info['matches']}次]"
                 
                 # 限制长度以适合通知
@@ -173,6 +180,36 @@ class BarkNotifier:
         except Exception as e:
             print(f"⚠️ 获取最新文件信息失败: {e}")
             return []
+    
+    def _format_time_ago(self, time_diff):
+        """格式化时间差为易读的格式"""
+        total_seconds = int(time_diff.total_seconds())
+        
+        if total_seconds < 0:
+            return "刚刚"
+        
+        # 计算各种时间单位
+        minutes = total_seconds // 60
+        hours = minutes // 60
+        days = hours // 24
+        weeks = days // 7
+        months = days // 30
+        years = days // 365
+        
+        if years > 0:
+            return f"{years}年前"
+        elif months > 0:
+            return f"{months}个月前"
+        elif weeks > 0:
+            return f"{weeks}周前"
+        elif days > 0:
+            return f"{days}天前"
+        elif hours > 0:
+            return f"{hours}小时前"
+        elif minutes > 0:
+            return f"{minutes}分钟前"
+        else:
+            return "刚刚"
     
     def send_notification(self, title, message, level="active"):
         """发送 Bark 通知"""
