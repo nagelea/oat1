@@ -1,0 +1,28 @@
+name: Test Cron Schedule
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    # 每5分钟运行一次（仅用于测试）
+    - cron: '*/5 * * * *'
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  test-cron:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Test cron execution
+      run: |
+        echo "🎉 Cron 调度工作正常！"
+        echo "当前 UTC 时间: $(date -u)"
+        echo "当前北京时间: $(TZ=Asia/Shanghai date)"
+        echo "工作流触发成功 ✅"
+        
+    - name: Check repository access
+      run: |
+        echo "测试仓库访问权限..."
+        echo "当前仓库: ${{ github.repository }}"
+        echo "触发事件: ${{ github.event_name }}"
