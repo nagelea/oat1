@@ -1,204 +1,317 @@
 #!/usr/bin/env python3
 """
-Bark 快速测试脚本
-用于验证 Bark 配置是否正确
+Bark 通知脚本
+当发现新的敏感内容时发送 Bark 通知
 """
 
-import requests
-import os
 import json
+import os
+import requests
 from datetime import datetime
+from urllib.parse import quote
 
 
-def test_bark_simple():
-    """简单的 Bark 测试"""
-    bark_key = os.environ.get('BARK_KEY')
-    bark_server = os.environ.get('BARK_SERVER', 'https://api.day.app')
-    
-    if not bark_key:
-        print("❌ 请设置 BARK_KEY 环境变量")
-        return False
-    
-    # 确保服务器地址格式正确
-    if not bark_server.startswith('http'):
-        bark_server = f'https://{bark_server}'
-    
-    if bark_server.endswith('/'):
-        bark_server = bark_server.rstrip('/')
-    
-    print(f"📱 测试 Bark 通知...")
-    print(f"🔗 服务器: {bark_server}")
-    print(f"🔑 Key: {bark_key[:8]}...")
-    
-    # 方法1: 使用 POST 请求 (推荐)
-    print("\n🧪 方法1: POST 请求测试")
-    success1 = test_post_method(bark_server, bark_key)
-    
-    # 方法2: 使用简单的 GET 请求
-    print("\n🧪 方法2: GET 请求测试")
-    success2 = test_get_method(bark_server, bark_key)
-    
-    return success1 or success2
-
-
-def test_post_method(bark_server, bark_key):
-    """测试 POST 方法"""
-    try:
-        url = f"{bark_server}/{bark_key}"
+class BarkNotifier:
+    def __init__(self):
+        self.bark_key = os.environ.get('BARK_KEY')
+        self.bark_server = os.environ.get('BARK_SERVER', 'https://api.day.app')
         
-        data = {
-            'title': '🧪 Bark 测试',
-            'body': f'测试时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n这是一条测试消息。',
-            'level': 'passive',
-            'sound': 'birdsong'
-        }
+        if not self.bark_key:
+            raise ValueError("❌ BARK_KEY 环境变量未设置")
         
-        print(f"📤 POST URL: {url}")
-        print(f"📋 数据: {data}")
+        # 确保服务器地址格式正确
+        if not self.bark_server.startswith('http'):
+            self.bark_server = f'https://{self.bark_server}'
         
-        response = requests.post(url, json=data, timeout=10)
-        
-        print(f"📊 状态码: {response.status_code}")
-        print(f"📄 响应: {response.text}")
-        
-        if response.status_code == 200:
-            try:
-                result = response.json()
-                if result.get('code') == 200:
-                    print("✅ POST 方法测试成功!")
-                    return True
-                else:
-                    print(f"❌ 服务器返回错误: {result}")
-                    return False
-            except:
-                # 有些 Bark 服务器可能不返回 JSON
-                if 'success' in response.text.lower():
-                    print("✅ POST 方法测试成功! (非JSON响应)")
-                    return True
-                else:
-                    print("❌ 响应格式异常")
-                    return False
-        else:
-            print(f"❌ POST 方法失败: {response.status_code}")
-            return False
+        print(f"📱 Bark 服务器: {self.bark_server}")
+        print(f"🔑 Bark Key: {self.bark_key[:8]}...")
+    
+    def load_findings_data(self):
+        """加载发现数据"""
+        try:
+            with open('reports/new_findings_check.json', 'r', encoding='utf-8') as f:
+                check_data = json.load(f)
             
-    except Exception as e:
-        print(f"❌ POST 方法异常: {e}")
-        return False
-
-
-def test_get_method(bark_server, bark_key):
-    """测试 GET 方法"""
-    try:
-        from urllib.parse import quote
+            with open('reports/raw_data.json', 'r', encoding='utf-8') as f:
+                raw_data = json.load(f)
+            
+            return check_data, raw_data
+            
+        except FileNotFoundError as e:
+            print(f"❌ 找不到数据文件: {e}")
+            return None, None
+        except Exception as e:
+            print(f"❌ 加载数据失败: {e}")
+            return None, None
+    
+    def create_notification_content(self, check_data, raw_data):
+        """创建通知内容"""
+        analysis = check_data.get('analysis', {})
+        is_first_scan = analysis.get('is_first_scan', False)
         
-        title = "🧪 Bark GET测试"
-        message = f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        # 基本信息
+        total_files = analysis.get('total_files', 0)
+        public_files = analysis.get('public_files', 0)
+        private_files = analysis.get('private_files', 0)
+        total_matches = analysis.get('total_matches', 0)
+        risk_level = analysis.get('risk_level', 'UNKNOWN')
         
-        # URL 编码
-        encoded_title = quote(title.encode('utf-8'))
-        encoded_message = quote(message.encode('utf-8'))
+        # 构建标题
+        if is_first_scan:
+            title = "🔍 GitHub 安全扫描 - 首次扫描完成"
+        elif total_files > 0:
+            title = f"🚨 GitHub 安全警报 - 发现 {total_files} 个敏感文件"
+        else:
+            title = "✅ GitHub 安全扫描 - 无新发现"
         
-        url = f"{bark_server}/{bark_key}/{encoded_title}/{encoded_message}"
-        params = {
-            'level': 'passive',
-            'sound': 'birdsong'
-        }
+        # 构建消息体
+        message_parts = []
         
-        print(f"📤 GET URL: {url}")
-        print(f"📋 参数: {params}")
+        # 扫描概要
+        scan_time = datetime.fromisoformat(analysis.get('scan_time', '')).strftime('%Y-%m-%d %H:%M')
+        message_parts.append(f"⏰ 扫描时间: {scan_time}")
+        message_parts.append(f"🎯 风险等级: {risk_level}")
         
-        response = requests.get(url, params=params, timeout=10)
+        if total_files > 0:
+            message_parts.append(f"📊 发现统计:")
+            message_parts.append(f"  • 总文件数: {total_files}")
+            if public_files > 0:
+                message_parts.append(f"  • 🌐 公开仓库: {public_files} 个")
+            if private_files > 0:
+                message_parts.append(f"  • 🔒 私有仓库: {private_files} 个")
+            message_parts.append(f"  • 总匹配次数: {total_matches}")
+            
+            # 涉及的仓库
+            repositories = analysis.get('repositories', [])
+            if repositories:
+                message_parts.append(f"\n📋 涉及仓库 ({len(repositories)}个):")
+                for repo in repositories[:5]:  # 只显示前5个
+                    message_parts.append(f"  • {repo}")
+                if len(repositories) > 5:
+                    message_parts.append(f"  • ... 还有 {len(repositories) - 5} 个仓库")
+            
+            # 风险提醒
+            if public_files > 0:
+                message_parts.append(f"\n⚠️ 警告: 在公开仓库中发现敏感内容!")
+                message_parts.append(f"请立即检查并采取行动!")
+        else:
+            message_parts.append("✅ 本次扫描未发现新的敏感内容")
         
-        print(f"📊 状态码: {response.status_code}")
-        print(f"📄 响应: {response.text}")
+        # GitHub Actions 链接
+        github_repo = os.environ.get('GITHUB_REPOSITORY', '')
+        github_run_id = os.environ.get('GITHUB_RUN_ID', '')
+        if github_repo and github_run_id:
+            actions_url = f"https://github.com/{github_repo}/actions/runs/{github_run_id}"
+            message_parts.append(f"\n🔗 查看详细报告: {actions_url}")
         
-        if response.status_code == 200:
-            try:
-                result = response.json()
-                if result.get('code') == 200:
-                    print("✅ GET 方法测试成功!")
-                    return True
-                else:
-                    print(f"❌ 服务器返回错误: {result}")
-                    return False
-            except:
-                print("✅ GET 方法测试成功! (非JSON响应)")
+        message = '\n'.join(message_parts)
+        
+        return title, message
+    
+    def send_notification(self, title, message, level="active"):
+        """发送 Bark 通知"""
+        try:
+            # 根据风险等级设置通知级别和声音
+            if "CRITICAL" in message or "🚨" in title:
+                level = "critical"
+                sound = "alarm"
+            elif "HIGH" in message or "⚠️" in title:
+                level = "active"
+                sound = "multiwayinvitation"
+            elif "MEDIUM" in message:
+                level = "active"
+                sound = "newmail"
+            else:
+                level = "active"
+                sound = "birdsong"
+            
+            # 确保服务器地址格式正确
+            if self.bark_server.endswith('/'):
+                self.bark_server = self.bark_server.rstrip('/')
+            
+            # 方法1: 使用 POST 请求 (推荐，避免 URL 长度限制)
+            url = f"{self.bark_server}/{self.bark_key}"
+            
+            # 构建请求数据
+            data = {
+                'title': title,
+                'body': message,
+                'level': level,
+                'sound': sound,
+                'group': 'GitHub安全扫描',
+                'icon': 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png'
+            }
+            
+            print(f"📤 发送 Bark 通知...")
+            print(f"🔗 URL: {url}")
+            print(f"📋 数据: {{'title': '{title[:30]}...', 'level': '{level}', 'sound': '{sound}'}}")
+            
+            # 使用 POST 请求发送
+            response = requests.post(url, json=data, timeout=10)
+            
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                    if result.get('code') == 200:
+                        print(f"✅ Bark 通知发送成功!")
+                        print(f"📱 消息: {result.get('message', 'Success')}")
+                        return True
+                    else:
+                        print(f"❌ Bark 服务器返回错误: {result}")
+                        # 尝试备用方法
+                        return self._send_notification_fallback(title, message, level, sound)
+                except json.JSONDecodeError:
+                    # 如果响应不是 JSON，可能是成功的
+                    if 'success' in response.text.lower() or response.status_code == 200:
+                        print(f"✅ Bark 通知发送成功! (非JSON响应)")
+                        return True
+                    else:
+                        print(f"❌ 响应解析失败: {response.text}")
+                        return self._send_notification_fallback(title, message, level, sound)
+            else:
+                print(f"❌ HTTP 请求失败: {response.status_code}")
+                print(f"📄 响应内容: {response.text}")
+                # 尝试备用方法
+                return self._send_notification_fallback(title, message, level, sound)
+                
+        except requests.exceptions.Timeout:
+            print("❌ 请求超时，请检查网络连接")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ 网络请求失败: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ 发送通知失败: {e}")
+            return False
+    
+    def _send_notification_fallback(self, title, message, level, sound):
+        """备用发送方法 - 使用 GET 请求简化版本"""
+        try:
+            print("🔄 尝试备用发送方法...")
+            
+            # 简化消息内容以避免 URL 过长
+            short_message = self._create_short_message(title, message)
+            
+            # URL 编码
+            from urllib.parse import quote
+            encoded_title = quote(title.encode('utf-8'))
+            encoded_message = quote(short_message.encode('utf-8'))
+            
+            # 构建简化的 GET 请求
+            url = f"{self.bark_server}/{self.bark_key}/{encoded_title}/{encoded_message}"
+            params = {
+                'level': level,
+                'sound': sound
+            }
+            
+            print(f"🔗 备用 URL: {url[:100]}...")
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                print(f"✅ 备用方法发送成功!")
                 return True
-        else:
-            print(f"❌ GET 方法失败: {response.status_code}")
+            else:
+                print(f"❌ 备用方法也失败: {response.status_code}")
+                print(f"📄 响应: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 备用方法失败: {e}")
             return False
-            
-    except Exception as e:
-        print(f"❌ GET 方法异常: {e}")
-        return False
-
-
-def test_with_curl():
-    """提供 curl 命令进行手动测试"""
-    bark_key = os.environ.get('BARK_KEY')
-    bark_server = os.environ.get('BARK_SERVER', 'https://api.day.app')
     
-    if not bark_key:
-        print("❌ 请设置 BARK_KEY 环境变量")
-        return
+    def _create_short_message(self, title, message):
+        """创建简化的消息内容"""
+        lines = message.split('\n')
+        short_lines = []
+        
+        # 保留重要信息
+        for line in lines:
+            if any(keyword in line for keyword in ['扫描时间', '风险等级', '总文件数', '公开仓库', '警告']):
+                short_lines.append(line)
+            elif len(short_lines) < 5:  # 限制行数
+                short_lines.append(line)
+        
+        short_message = '\n'.join(short_lines)
+        
+        # 限制总长度
+        if len(short_message) > 500:
+            short_message = short_message[:500] + '...'
+        
+        return short_message
     
-    if bark_server.endswith('/'):
-        bark_server = bark_server.rstrip('/')
-    
-    print("\n🔧 手动测试命令:")
-    print("你可以在终端中运行以下命令进行手动测试:\n")
-    
-    # POST 方法
-    print("1. POST 方法:")
-    curl_post = f'''curl -X POST "{bark_server}/{bark_key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{{"title": "🧪 手动测试", "body": "这是手动测试消息", "level": "passive"}}\''''
-    print(curl_post)
-    
-    # GET 方法
-    print("\n2. GET 方法:")
-    curl_get = f'curl "{bark_server}/{bark_key}/🧪%20手动测试/这是手动测试消息?level=passive"'
-    print(curl_get)
-    
-    print("\n如果上述命令成功，你应该会收到 Bark 通知。")
+    def send_test_notification(self):
+        """发送测试通知"""
+        title = "🧪 GitHub 安全扫描测试"
+        message = f"测试通知发送时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n这是一条测试消息，用于验证 Bark 通知配置是否正确。"
+        
+        return self.send_notification(title, message, "passive")
 
 
 def main():
     """主函数"""
-    print("🚀 Bark 配置测试工具")
-    print("=" * 50)
-    
-    # 检查环境变量
-    bark_key = os.environ.get('BARK_KEY')
-    bark_server = os.environ.get('BARK_SERVER', 'https://api.day.app')
-    
-    if not bark_key:
-        print("❌ 错误: 未设置 BARK_KEY 环境变量")
-        print("\n💡 设置方法:")
-        print("export BARK_KEY='your_bark_key'")
-        print("export BARK_SERVER='https://api.day.app'  # 可选")
-        return
-    
-    print(f"✅ BARK_KEY: {bark_key[:8]}...")
-    print(f"✅ BARK_SERVER: {bark_server}")
-    
-    # 运行测试
-    success = test_bark_simple()
-    
-    if success:
-        print("\n🎉 Bark 配置测试成功!")
-        print("现在你可以在 GitHub Actions 中正常使用 Bark 通知了。")
-    else:
-        print("\n❌ Bark 配置测试失败!")
-        print("\n🔧 故障排除建议:")
-        print("1. 检查 BARK_KEY 是否正确")
-        print("2. 确认 Bark App 正在运行")
-        print("3. 检查网络连接")
-        print("4. 尝试手动测试命令")
+    try:
+        print("📱 准备发送 Bark 通知...")
         
-        # 提供手动测试命令
-        test_with_curl()
+        # 检查是否强制发送通知
+        force_notify = os.environ.get('INPUT_FORCE_NOTIFY', 'false').lower() == 'true'
+        
+        notifier = BarkNotifier()
+        
+        # 如果是强制通知且没有发现数据，发送测试通知
+        if force_notify:
+            if not os.path.exists('reports/new_findings_check.json'):
+                print("🧪 发送测试通知...")
+                success = notifier.send_test_notification()
+                exit(0 if success else 1)
+        
+        # 加载数据
+        check_data, raw_data = notifier.load_findings_data()
+        if not check_data or not raw_data:
+            print("❌ 无法加载必要数据，跳过通知")
+            exit(1)
+        
+        # 检查是否需要发送通知
+        has_new_findings = check_data.get('has_new_findings', False)
+        analysis = check_data.get('analysis', {})
+        total_files = analysis.get('total_files', 0)
+        
+        if not has_new_findings and not force_notify:
+            print("ℹ️ 无新发现且未强制通知，跳过发送")
+            exit(0)
+        
+        # 创建通知内容
+        title, message = notifier.create_notification_content(check_data, raw_data)
+        
+        print(f"📝 通知标题: {title}")
+        print(f"📄 通知内容预览: {message[:100]}...")
+        
+        # 发送通知
+        success = notifier.send_notification(title, message)
+        
+        if success:
+            # 记录通知发送日志
+            notification_log = {
+                'sent_at': datetime.now().isoformat(),
+                'title': title,
+                'total_files': total_files,
+                'public_files': analysis.get('public_files', 0),
+                'risk_level': analysis.get('risk_level', 'UNKNOWN'),
+                'repositories_count': len(analysis.get('repositories', [])),
+                'was_forced': force_notify
+            }
+            
+            os.makedirs('reports', exist_ok=True)
+            with open('reports/notification_log.json', 'w', encoding='utf-8') as f:
+                json.dump(notification_log, f, indent=2, ensure_ascii=False)
+            
+            print("📊 通知日志已保存")
+        
+        exit(0 if success else 1)
+        
+    except Exception as e:
+        print(f"❌ 通知脚本执行失败: {e}")
+        exit(1)
 
 
 if __name__ == "__main__":
